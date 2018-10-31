@@ -7,6 +7,7 @@ import copy
 import torch
 from torch import nn
 import torch.nn.functional as F
+import numpy as np
 
 START_TAG = "START"
 STOP_TAG = "STOP"
@@ -17,9 +18,10 @@ def argmax(vec):
     return idx.item()
 
 class BiLSTM_CRF(nn.Module):
-    def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20):
+    def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20, batch_size=2):
         super(BiLSTM_CRF, self).__init__()
         self.hidden_dim = 128
+        self.batch_size = batch_size
         self.embedding_dim = 100
         self.vocab_size = vocab_size
         
@@ -36,15 +38,17 @@ class BiLSTM_CRF(nn.Module):
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
-        return torch.randn(2, 1, self.hidden_dim)
+        return torch.randn(2, self.batch_size, self.hidden_dim)
 
     def __get_lstm_features(self, sentence):
         self.hidden = self.init_hidden()
-        embeddings = self.word_embeddings(sentence).view(1, len(sentence), self.embedding_dim)
+        length = sentence.shape[1]
+        embeddings = self.word_embeddings(sentence).view(self.batch_size, length, self.embedding_dim)
 
         lstm_out, self.hidden = self.gru(embeddings, self.hidden)
-        lstm_out = lstm_out.view(len(sentence), self.hidden_dim * 2)
-        logits = F.softmax(self.hidden2tag(lstm_out))
+        lstm_out = lstm_out.view(self.batch_size, -1, self.hidden_dim * 2)
+        logits = F.softmax(self.hidden2tag(lstm_out), dim=-1)
+        # logits = self.hidden2tag(lstm_out)
         return logits
 
     def real_path_score(self, logits=[[]], label=[]):
@@ -91,43 +95,44 @@ class BiLSTM_CRF(nn.Module):
 
     def neg_log_likelihood(self, sentence, tags):
         logits = self.__get_lstm_features(sentence)
-        real_path_score = self.real_path_score(logits, tags)
-        total_score = self.total_score(logits, tags)
+        real_path_score = torch.zeros(1)
+        total_score = torch.zeros(1)
+        for logit, tag in zip(logits, tags):
+            real_path_score += self.real_path_score(logit, tag)
+            total_score += self.total_score(logit, tag)
         print("real score ", real_path_score)
         print("total score ", total_score)
+        print(total_score - real_path_score)
+        print("-"*50)
         return total_score - real_path_score
 
     def forward(self, sentence):
         logits = self.__get_lstm_features(sentence)
-        score, path = self.__viterbi_decode(logits)
+        for logit in logits:
+            score, path = self.__viterbi_decode(logit)
         return score, path
     
     def __viterbi_decode(self, logits):
-        import numpy as np
         backpointers = []
         trellis = torch.zeros(logits.size())
         backpointers = torch.zeros(logits.size(), dtype=torch.long)
         
         trellis[0] = logits[0]
         for t in range(1, len(logits)):
-            v = trellis[t - 1].expand(self.tag_size, self.tag_size) + self.transitions
+            v = trellis[t - 1].unsqueeze(1).expand_as(self.transitions) + self.transitions
             trellis[t] = logits[t] + torch.max(v, 0)[0]
-            backpointers[t] = np.argmax(v, 0)
-            import pdb;pdb.set_trace()
-
-
+            backpointers[t] = torch.max(v, 0)[1]
         viterbi = [np.argmax(trellis[-1])]
-        for bp in reversed(backpointers):
+        backpointers = backpointers.numpy()
+        for bp in reversed(backpointers[1:]):
             viterbi.append(bp[viterbi[-1]])
         viterbi.reverse()
-        viterbi_score = torch.max(trellis[-1], 0)[0]
-        import pdb; pdb.set_trace()
-        return viterbi, viterbi_score
+        viterbi_score = torch.max(trellis[-1], 0)[0].cpu().tolist()
+        return viterbi_score, viterbi
 
-    def __viterbi_decode_v1(self, logits):
+    def __viterbi_decode_v(self, logits):
         init_prob = 1.0
         trans_prob = self.transitions.t()
-        score = torch.zeros(1)
         prev_prob = init_prob
         path = []
         for index, logit in enumerate(logits):
@@ -135,7 +140,6 @@ class BiLSTM_CRF(nn.Module):
                 obs_prob = logit * prev_prob
                 prev_prob = obs_prob
                 prev_score, max_path = torch.max(prev_prob, -1)
-                import pdb; pdb.set_trace()
                 path.append(max_path)
                 continue
             obs_prob = (prev_prob * trans_prob).t() * logit

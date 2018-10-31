@@ -18,15 +18,17 @@ def train():
     for i in range(300):
         ner_model.zero_grad()
 
-        sentence = torch.tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10], dtype=torch.long)
-        tag = torch.tensor([0, 1, 1, 1, 5, 6, 2, 5, 6, 2, 2], dtype=torch.long)
-
+        sentence = torch.tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]], dtype=torch.long)
+        tag = torch.tensor([[0, 1, 1, 1, 5, 6, 2, 5, 6, 2, 2]], dtype=torch.long)
+        ner_model.batch_size = 1
         loss = ner_model.neg_log_likelihood(sentence, tag)
         loss.backward()
         optimizer.step()
         print(loss)
 
 train()
+# ner_model.viterbi_decode_torch()
 with torch.no_grad():
-    sentence = torch.tensor([ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10], dtype=torch.long)
+    ner_model.batch_size = 1
+    sentence = torch.tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]], dtype=torch.long)
     print(ner_model(sentence))
