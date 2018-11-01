@@ -7,28 +7,45 @@ import torch
 import torch.optim as optim
 
 from model import BiLSTM_CRF
+from data_manager import DataManager
 
-START_TAG = "START"
-STOP_TAG = "STOP"
 
-ner_model = BiLSTM_CRF(tag_map={"B-ORG": 0, "I-ORG": 1, "O": 2, START_TAG: 3, STOP_TAG: 4, "B-COM":5, "I-COM":6})
-optimizer = optim.SGD(ner_model.parameters(), lr=0.01, weight_decay=1e-4)
+class ChineseNer(object):
 
-def train():
-    for i in range(300):
-        ner_model.zero_grad()
+    def train(self):
 
-        sentence = torch.tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]], dtype=torch.long)
-        tag = torch.tensor([[0, 1, 1, 1, 5, 6, 2, 5, 6, 2, 2]], dtype=torch.long)
-        ner_model.batch_size = 1
-        loss = ner_model.neg_log_likelihood(sentence, tag)
-        loss.backward()
-        optimizer.step()
-        print(loss)
+        train_manager = DataManager(batch_size=1)
+        ner_model = BiLSTM_CRF(
+            tag_map=train_manager.tag_map,
+            vocab_size=len(train_manager.vocab),
+            batch_size=1
+        )
+        optimizer = optim.SGD(ner_model.parameters(), lr=0.01, weight_decay=1e-4)
+        for _ in range(10):
+            ner_model.zero_grad()
 
-train()
-# ner_model.viterbi_decode_torch()
-with torch.no_grad():
-    ner_model.batch_size = 1
-    sentence = torch.tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]], dtype=torch.long)
-    print(ner_model(sentence))
+            for batch in train_manager.get_batch():
+                sentences, tags, length = zip(*batch)
+                sentences = torch.tensor(sentences, dtype=torch.long)
+                tags = torch.tensor(tags, dtype=torch.long)
+                length = torch.tensor(length, dtype=torch.long)
+
+                loss = ner_model.neg_log_likelihood(sentences, tags, length)
+                loss.backward()
+                optimizer.step()
+                break
+            
+            sentences, tags, length = zip(*batch)
+            print(ner_model(sentences))
+            print(tags)
+            exit()
+            
+
+    def predict(self):
+        with torch.no_grad():
+            ner_model.batch_size = 1
+            sentence = torch.tensor([[ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]], dtype=torch.long)
+            print(ner_model(sentence))
+
+cn = ChineseNer()
+cn.train()

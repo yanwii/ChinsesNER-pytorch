@@ -73,8 +73,7 @@ class BiLSTM_CRF(nn.Module):
             for next_tag in range(self.tagset_size):
                 # broadcast the emission score: it is the same regardless of
                 # the previous tag
-                emit_score = feat[next_tag].view(
-                    1, -1).expand(1, self.tagset_size)
+                emit_score = feat[next_tag].view(1, -1).expand(1, self.tagset_size)
                 # the ith entry of trans_score is the score of transitioning to
                 # next_tag from i
                 trans_score = self.transitions[next_tag].view(1, -1)
@@ -143,17 +142,14 @@ class BiLSTM_CRF(nn.Module):
         path_score = terminal_var[0][best_tag_id]
 
         # Follow the back pointers to decode the best path.
-        print(list(reversed(backpointers)))
         best_path = [best_tag_id]
         for bptrs_t in reversed(backpointers):
-            print(best_tag_id)
             best_tag_id = bptrs_t[best_tag_id]
             best_path.append(best_tag_id)
         # Pop off the start tag (we dont want to return that to the caller)
         start = best_path.pop()
         assert start == self.tag_to_ix[START_TAG]  # Sanity check
         best_path.reverse()
-        print(path_score)
         return path_score, best_path
 
     def neg_log_likelihood(self, sentence, tags):
@@ -184,36 +180,51 @@ for sentence, tags in training_data:
         if word not in word_to_ix:
             word_to_ix[word] = len(word_to_ix)
 
-tag_to_ix = {"B-ORG": 0, "I-ORG": 1, "O": 2, START_TAG: 3, STOP_TAG: 4, "B-COM":5, "I-COM":6}
+from data_manager import DataManager
+train_manager = DataManager(batch_size=1, data_type="train")
 
-model = BiLSTM_CRF(len(word_to_ix), tag_to_ix, EMBEDDING_DIM, HIDDEN_DIM)
-optimizer = optim.SGD(model.parameters(), lr=0.01, weight_decay=1e-4)
+tag_to_ix = train_manager.tag_map
+tag_to_ix["<START>"] = len(tag_to_ix)
+tag_to_ix["<STOP>"] = len(tag_to_ix)
+print(tag_to_ix)
+
+model = BiLSTM_CRF(len(train_manager.vocab), tag_to_ix, EMBEDDING_DIM, HIDDEN_DIM)
+optimizer = optim.Adam(model.parameters(), weight_decay=1e-4)
 
 # Check predictions before training
-with torch.no_grad():
-    precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
-    precheck_tags = torch.tensor([tag_to_ix[t] for t in training_data[0][1]], dtype=torch.long)
-    print(model(precheck_sent))
+# with torch.no_grad():
+#     precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
+#     precheck_tags = torch.tensor([tag_to_ix[t] for t in training_data[0][1]], dtype=torch.long)
+#     print(model(precheck_sent))
 
 # Make sure prepare_sequence from earlier in the LSTM section is loaded
 for epoch in range(
-        300):  # again, normally you would NOT do 300 epochs, it is toy data
-    for sentence, tags in training_data:
+        100):  # again, normally you would NOT do 300 epochs, it is toy data
+    for batch in train_manager.get_batch():
+        sentences, tags, length = zip(*batch)
+        leng = length[0]
+        sentence = torch.tensor(sentences[0], dtype=torch.long)[:leng]
+        tag = torch.tensor(tags[0], dtype=torch.long)[:leng]
+
         # Step 1. Remember that Pytorch accumulates gradients.
         # We need to clear them out before each instance
         model.zero_grad()
-        
-        
         # Step 2. Get our inputs ready for the network, that is,
         # turn them into Tensors of word indices.
-        sentence_in = prepare_sequence(sentence, word_to_ix)
-        targets = torch.tensor([tag_to_ix[t] for t in tags], dtype=torch.long)
+        # sentence_in = prepare_sequence(sentence, word_to_ix)
+        # targets = torch.tensor([tag_to_ix[t] for t in tags], dtype=torch.long)
         # sentence_in = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long)
         # targets = torch.tensor([0, 1, 2, 2, 3], dtype=torch.long)
         # Step 3. Run our forward pass.
-        loss = model.neg_log_likelihood(sentence_in, targets)
+        loss = model.neg_log_likelihood(sentence, tag)
         # Step 4. Compute the loss, gradients, and update the parameters by
         # calling optimizer.step()
+        print(loss)
+
+        score, path = model(sentence)
+        print(path)
+        print(tag.cpu().tolist())
+        print("-"*50)
         loss.backward()
         optimizer.step()
 

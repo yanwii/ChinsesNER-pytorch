@@ -17,6 +17,12 @@ def argmax(vec):
     _, idx = torch.max(vec, 1)
     return idx.item()
 
+def log_sum_exp(vec):
+    max_score = vec[0, argmax(vec)]
+    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
+    return max_score + \
+        torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+
 class BiLSTM_CRF(nn.Module):
     def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20, batch_size=2):
         super(BiLSTM_CRF, self).__init__()
@@ -50,8 +56,17 @@ class BiLSTM_CRF(nn.Module):
         logits = F.softmax(self.hidden2tag(lstm_out), dim=-1)
         # logits = self.hidden2tag(lstm_out)
         return logits
+    
+    def real_path_score(self, feats, tags):
+        # Gives the score of a provided tag sequence
+        score = torch.zeros(1)
+        tags = torch.cat([torch.tensor([0], dtype=torch.long), tags])
+        for i, feat in enumerate(feats):
+            score = score + \
+                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
+        return score
 
-    def real_path_score(self, logits=[[]], label=[]):
+    def real_path_score_1(self, logits, label):
         '''
         caculate real path score  
         :params logits -> [len_sent * tag_size]
@@ -66,7 +81,21 @@ class BiLSTM_CRF(nn.Module):
         score = emission_score + transition_score
         return score
 
-    def total_score(self, logits=[[]], label=[]):
+    def total_score(self, logits, labels):
+        forward_var = logits[0]
+        for index in range(1, len(logits)):
+            alphas_t = []
+            logit = logits[index]
+            for next_tag in range(self.tag_size):
+                emit_score = logit[next_tag].view(1, -1).expand(1, self.tag_size)
+                trans_score = self.transitions[next_tag].view(1, -1)
+                next_tag_var = forward_var + trans_score + emit_score
+                alphas_t.append(log_sum_exp(next_tag_var).view(1))
+            forward_var = torch.cat(alphas_t).view(1, -1)
+        alpha = log_sum_exp(forward_var)
+        return alpha
+
+    def total_score_v1(self, logits, label):
         """
         caculate total score
 
@@ -77,27 +106,39 @@ class BiLSTM_CRF(nn.Module):
         """
         # label = [0, 1, 2, 2, 3, 0]
         # logits = torch.randn(len(label), self.tag_size)
-
-        init_alphas = torch.full((1, self.tag_size), -10000.)
-        init_alphas[0][self.tag_map[START_TAG]] = 0.
+        self.tag_size = 2
+        logits = [
+            [0.1, 0.9],
+            [0.3, 0.7],
+        ]
+        transition = [
+            [1, 1],
+            [1, 1]
+        ]
+        logits = torch.tensor(logits)
+        transition = torch.tensor(transition, dtype=torch.float)
 
         obs = []
         # [[x0, x1],[x0, x1]] - > [[x0, x0], [x1, x1]]
         previous = logits[0].view(1, -1)
         for index in range(1, len(logits)): 
             previous = previous.expand(self.tag_size, self.tag_size).t()
-            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size).t()
-            scores = previous + obs + self.transitions
+            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
+            # scores = previous + obs + self.transitions
+            scores = previous + obs + transition
+            import pdb; pdb.set_trace()
             previous = torch.log(torch.sum(torch.exp(scores), 0))
         # caculate total_scores
         total_scores = torch.log(torch.sum(torch.exp(previous)))
         return total_scores
 
-    def neg_log_likelihood(self, sentence, tags):
+    def neg_log_likelihood(self, sentence, tags, length):
         logits = self.__get_lstm_features(sentence)
         real_path_score = torch.zeros(1)
         total_score = torch.zeros(1)
-        for logit, tag in zip(logits, tags):
+        for logit, tag, leng in zip(logits, tags, length):
+            logit = logit[:leng]
+            tag = tag[:leng]
             real_path_score += self.real_path_score(logit, tag)
             total_score += self.total_score(logit, tag)
         print("real score ", real_path_score)
@@ -107,6 +148,7 @@ class BiLSTM_CRF(nn.Module):
         return total_score - real_path_score
 
     def forward(self, sentence):
+        sentence = torch.tensor(sentence, dtype=torch.long)
         logits = self.__get_lstm_features(sentence)
         for logit in logits:
             score, path = self.__viterbi_decode(logit)
@@ -122,7 +164,7 @@ class BiLSTM_CRF(nn.Module):
             v = trellis[t - 1].unsqueeze(1).expand_as(self.transitions) + self.transitions
             trellis[t] = logits[t] + torch.max(v, 0)[0]
             backpointers[t] = torch.max(v, 0)[1]
-        viterbi = [np.argmax(trellis[-1])]
+        viterbi = [torch.max(trellis[-1])]
         backpointers = backpointers.numpy()
         for bp in reversed(backpointers[1:]):
             viterbi.append(bp[viterbi[-1]])
@@ -130,7 +172,7 @@ class BiLSTM_CRF(nn.Module):
         viterbi_score = torch.max(trellis[-1], 0)[0].cpu().tolist()
         return viterbi_score, viterbi
 
-    def __viterbi_decode_v(self, logits):
+    def __viterbi_decode_v1(self, logits):
         init_prob = 1.0
         trans_prob = self.transitions.t()
         prev_prob = init_prob
@@ -140,15 +182,15 @@ class BiLSTM_CRF(nn.Module):
                 obs_prob = logit * prev_prob
                 prev_prob = obs_prob
                 prev_score, max_path = torch.max(prev_prob, -1)
-                path.append(max_path)
+                path.append(max_path.cpu().tolist())
                 continue
             obs_prob = (prev_prob * trans_prob).t() * logit
             max_prob, _ = torch.max(obs_prob, 1)
             _, final_max_index = torch.max(max_prob, -1)
             prev_prob = obs_prob[final_max_index]
             prev_score, max_path = torch.max(prev_prob, -1)
-            path.append(max_path)
-        return prev_score, path
+            path.append(max_path.cpu().tolist())
+        return prev_score.cpu().tolist(), path
 
 
     # https://github.com/napsternxg/pytorch-practice/blob/master/Viterbi%20decoding%20and%20CRF.ipynb
