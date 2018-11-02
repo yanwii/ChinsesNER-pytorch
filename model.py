@@ -18,14 +18,14 @@ def argmax(vec):
     return idx.item()
 
 def log_sum_exp(vec):
-    max_score = vec[0, argmax(vec)]
-    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    return max_score + \
-        torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    max_score = torch.max(vec, -1)[0].unsqueeze(0).t()
+    max_score_broadcast = max_score.expand(vec.size(1), vec.size()[1])
+    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    return result.squeeze(1)
 
-class BiLSTM_CRF(nn.Module):
+class BiLSTMCRF(nn.Module):
     def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20, batch_size=2):
-        super(BiLSTM_CRF, self).__init__()
+        super(BiLSTMCRF, self).__init__()
         self.hidden_dim = 128
         self.batch_size = batch_size
         self.embedding_dim = 100
@@ -38,26 +38,26 @@ class BiLSTM_CRF(nn.Module):
             torch.randn(self.tag_size, self.tag_size)
         )
         self.word_embeddings = nn.Embedding(vocab_size, self.embedding_dim)
-        self.gru = nn.GRU(self.embedding_dim, self.hidden_dim,
+        self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim // 2,
                         num_layers=1, bidirectional=True, batch_first=True)
-        self.hidden2tag = nn.Linear(self.hidden_dim * 2, self.tag_size)
+        self.hidden2tag = nn.Linear(self.hidden_dim, self.tag_size)
         self.hidden = self.init_hidden()
 
     def init_hidden(self):
-        return torch.randn(2, self.batch_size, self.hidden_dim)
+        return (torch.randn(2, self.batch_size, self.hidden_dim // 2),
+                torch.randn(2, self.batch_size, self.hidden_dim // 2))
 
     def __get_lstm_features(self, sentence):
         self.hidden = self.init_hidden()
         length = sentence.shape[1]
         embeddings = self.word_embeddings(sentence).view(self.batch_size, length, self.embedding_dim)
 
-        lstm_out, self.hidden = self.gru(embeddings, self.hidden)
-        lstm_out = lstm_out.view(self.batch_size, -1, self.hidden_dim * 2)
-        logits = F.softmax(self.hidden2tag(lstm_out), dim=-1)
-        # logits = self.hidden2tag(lstm_out)
+        lstm_out, self.hidden = self.lstm(embeddings, self.hidden)
+        lstm_out = lstm_out.view(self.batch_size, -1, self.hidden_dim)
+        logits = self.hidden2tag(lstm_out)
         return logits
     
-    def real_path_score(self, feats, tags):
+    def real_path_score_(self, feats, tags):
         # Gives the score of a provided tag sequence
         score = torch.zeros(1)
         tags = torch.cat([torch.tensor([0], dtype=torch.long), tags])
@@ -66,7 +66,7 @@ class BiLSTM_CRF(nn.Module):
                 self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
         return score
 
-    def real_path_score_1(self, logits, label):
+    def real_path_score(self, logits, label):
         '''
         caculate real path score  
         :params logits -> [len_sent * tag_size]
@@ -79,9 +79,10 @@ class BiLSTM_CRF(nn.Module):
         emission_score = sum(map(lambda indic:logits[indic[0], indic[1]], enumerate(label)))
         transition_score = sum(map(lambda index:self.transitions[label[index], label[index+1]], range(len(label)-1)))
         score = emission_score + transition_score
+        import pdb; pdb.set_trace()
         return score
 
-    def total_score(self, logits, labels):
+    def total_score_1(self, logits, labels):
         forward_var = logits[0]
         for index in range(1, len(logits)):
             alphas_t = []
@@ -95,7 +96,7 @@ class BiLSTM_CRF(nn.Module):
         alpha = log_sum_exp(forward_var)
         return alpha
 
-    def total_score_v1(self, logits, label):
+    def total_score(self, logits, label):
         """
         caculate total score
 
@@ -106,45 +107,33 @@ class BiLSTM_CRF(nn.Module):
         """
         # label = [0, 1, 2, 2, 3, 0]
         # logits = torch.randn(len(label), self.tag_size)
-        self.tag_size = 2
-        logits = [
-            [0.1, 0.9],
-            [0.3, 0.7],
-        ]
-        transition = [
-            [1, 1],
-            [1, 1]
-        ]
-        logits = torch.tensor(logits)
-        transition = torch.tensor(transition, dtype=torch.float)
-
         obs = []
         # [[x0, x1],[x0, x1]] - > [[x0, x0], [x1, x1]]
         previous = logits[0].view(1, -1)
         for index in range(1, len(logits)): 
             previous = previous.expand(self.tag_size, self.tag_size).t()
             obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
-            # scores = previous + obs + self.transitions
-            scores = previous + obs + transition
-            import pdb; pdb.set_trace()
-            previous = torch.log(torch.sum(torch.exp(scores), 0))
+            scores = previous + obs + self.transitions
+            # previous = torch.log(torch.sum(torch.exp(scores), 0))
+            previous = log_sum_exp(scores)
         # caculate total_scores
-        total_scores = torch.log(torch.sum(torch.exp(previous)))
+        total_scores = log_sum_exp(previous.unsqueeze(0))[0]
         return total_scores
 
     def neg_log_likelihood(self, sentence, tags, length):
         logits = self.__get_lstm_features(sentence)
         real_path_score = torch.zeros(1)
+        real_path_score_1 = torch.zeros(1)
         total_score = torch.zeros(1)
         for logit, tag, leng in zip(logits, tags, length):
             logit = logit[:leng]
             tag = tag[:leng]
+            # real_path_score_1 += self.real_path_score_1(logit, tag)
             real_path_score += self.real_path_score(logit, tag)
             total_score += self.total_score(logit, tag)
-        print("real score ", real_path_score)
+
         print("total score ", total_score)
-        print(total_score - real_path_score)
-        print("-"*50)
+        print("real score ", real_path_score)
         return total_score - real_path_score
 
     def forward(self, sentence):
@@ -164,11 +153,12 @@ class BiLSTM_CRF(nn.Module):
             v = trellis[t - 1].unsqueeze(1).expand_as(self.transitions) + self.transitions
             trellis[t] = logits[t] + torch.max(v, 0)[0]
             backpointers[t] = torch.max(v, 0)[1]
-        viterbi = [torch.max(trellis[-1])]
+        viterbi = [torch.max(trellis[-1], -1)[1].cpu().tolist()]
         backpointers = backpointers.numpy()
         for bp in reversed(backpointers[1:]):
             viterbi.append(bp[viterbi[-1]])
         viterbi.reverse()
+
         viterbi_score = torch.max(trellis[-1], 0)[0].cpu().tolist()
         return viterbi_score, viterbi
 

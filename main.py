@@ -6,7 +6,7 @@
 import torch
 import torch.optim as optim
 
-from model import BiLSTM_CRF
+from model import BiLSTMCRF
 from data_manager import DataManager
 
 
@@ -15,12 +15,12 @@ class ChineseNer(object):
     def train(self):
 
         train_manager = DataManager(batch_size=1)
-        ner_model = BiLSTM_CRF(
+        ner_model = BiLSTMCRF(
             tag_map=train_manager.tag_map,
             vocab_size=len(train_manager.vocab),
             batch_size=1
         )
-        optimizer = optim.SGD(ner_model.parameters(), lr=0.01, weight_decay=1e-4)
+        optimizer = optim.Adam(ner_model.parameters())
         for _ in range(10):
             ner_model.zero_grad()
 
@@ -31,15 +31,14 @@ class ChineseNer(object):
                 length = torch.tensor(length, dtype=torch.long)
 
                 loss = ner_model.neg_log_likelihood(sentences, tags, length)
+
+                score, path = ner_model(sentences)
+                print(path)
+                print(tags[0].cpu().tolist())
+                print(loss)
+                print("-"*50)
                 loss.backward()
                 optimizer.step()
-                break
-            
-            sentences, tags, length = zip(*batch)
-            print(ner_model(sentences))
-            print(tags)
-            exit()
-            
 
     def predict(self):
         with torch.no_grad():

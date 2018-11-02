@@ -3,7 +3,7 @@
 @Author: yanwii
 @Date: 2018-09-28 16:19:07
 '''
-
+import copy
 import torch
 import torch.autograd as autograd
 import torch.nn as nn
@@ -27,8 +27,7 @@ def prepare_sequence(seq, to_ix):
 def log_sum_exp(vec):
     max_score = vec[0, argmax(vec)]
     max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    return max_score + \
-        torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
 
 class BiLSTM_CRF(nn.Module):
     
@@ -102,9 +101,11 @@ class BiLSTM_CRF(nn.Module):
         score = torch.zeros(1)
         tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
+            print(self.transitions[tags[i + 1], tags[i]], feat[tags[i + 1]])
             score = score + \
                 self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
         score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
+        import pdb; pdb.set_trace()
         print("real score ", score)
         return score
 
@@ -183,19 +184,29 @@ for sentence, tags in training_data:
 from data_manager import DataManager
 train_manager = DataManager(batch_size=1, data_type="train")
 
-tag_to_ix = train_manager.tag_map
+tag_to_ix = copy.deepcopy(train_manager.tag_map)
 tag_to_ix["<START>"] = len(tag_to_ix)
 tag_to_ix["<STOP>"] = len(tag_to_ix)
 print(tag_to_ix)
+print(train_manager.tag_map)
 
 model = BiLSTM_CRF(len(train_manager.vocab), tag_to_ix, EMBEDDING_DIM, HIDDEN_DIM)
-optimizer = optim.Adam(model.parameters(), weight_decay=1e-4)
+optimizer_1 = optim.Adam(model.parameters(), weight_decay=1e-4)
+
 
 # Check predictions before training
 # with torch.no_grad():
 #     precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
 #     precheck_tags = torch.tensor([tag_to_ix[t] for t in training_data[0][1]], dtype=torch.long)
 #     print(model(precheck_sent))
+
+from model import BiLSTMCRF
+ner_model = BiLSTMCRF(
+    tag_map=train_manager.tag_map,
+    vocab_size=len(train_manager.vocab),
+    batch_size=1
+)
+optimizer_2 = optim.Adam(ner_model.parameters(), weight_decay=1e-4)
 
 # Make sure prepare_sequence from earlier in the LSTM section is loaded
 for epoch in range(
@@ -216,18 +227,30 @@ for epoch in range(
         # sentence_in = torch.tensor([1, 2, 3, 4, 5], dtype=torch.long)
         # targets = torch.tensor([0, 1, 2, 2, 3], dtype=torch.long)
         # Step 3. Run our forward pass.
-        loss = model.neg_log_likelihood(sentence, tag)
+        loss_1 = model.neg_log_likelihood(sentence, tag)
         # Step 4. Compute the loss, gradients, and update the parameters by
         # calling optimizer.step()
-        print(loss)
-
+        loss_1.backward()
+        optimizer_1.step()
+        print(loss_1)
         score, path = model(sentence)
         print(path)
         print(tag.cpu().tolist())
         print("-"*50)
-        loss.backward()
-        optimizer.step()
+        # sentences = torch.tensor(sentences, dtype=torch.long)
+        # tags = torch.tensor(tags, dtype=torch.long)
+        # length = torch.tensor(length, dtype=torch.long)
+        # loss_2 = ner_model.neg_log_likelihood(sentences, tags, length)
+        # score, path = ner_model(sentences)
+        # print(path)
+        # print(tags[0].cpu().tolist())
+        # print(loss_2)
+        # print("-"*50)
+        # loss_2.backward()
+        # optimizer_2.step()
 
+
+        
 # Check predictions after training
 with torch.no_grad():
     precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
