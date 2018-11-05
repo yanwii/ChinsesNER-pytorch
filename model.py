@@ -37,6 +37,9 @@ class BiLSTMCRF(nn.Module):
         self.transitions = nn.Parameter(
             torch.randn(self.tag_size, self.tag_size)
         )
+        self.transitions.data[:, self.tag_map[START_TAG]] = -10000
+        self.transitions.data[self.tag_map[STOP_TAG], :] = -10000
+
         self.word_embeddings = nn.Embedding(vocab_size, self.embedding_dim)
         self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim // 2,
                         num_layers=1, bidirectional=True, batch_first=True)
@@ -63,7 +66,7 @@ class BiLSTMCRF(nn.Module):
         tags = torch.cat([torch.tensor([0], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
             score = score + \
-                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
+                self.transitions[tags[i], tags[i + 1]] + feat[tags[i + 1]]
         return score
 
     def real_path_score(self, logits, label):
@@ -76,15 +79,24 @@ class BiLSTMCRF(nn.Module):
         Emission_Score = logits(0, label[START]) + logits(1, label[1]) + ... + logits(n, label[STOP])  
         Transition_Score = Trans(label[START], label[1]) + Trans(label[1], label[2]) + ... + Trans(label[n-1], label[STOP])  
         '''
-        emission_score = sum(map(lambda indic:logits[indic[0], indic[1]], enumerate(label)))
-        transition_score = sum(map(lambda index:self.transitions[label[index], label[index+1]], range(len(label)-1)))
-        score = emission_score + transition_score
-        import pdb; pdb.set_trace()
+        score = torch.zeros(1)
+        label = torch.cat([torch.tensor([self.tag_map[START_TAG]], dtype=torch.long), label])
+        for index, logit in enumerate(logits):
+            emission_score = logit[label[index + 1]]
+            transition_score = self.transitions[label[index], label[index + 1]]
+            score += emission_score + transition_score
+        score += self.transitions[label[-1], self.tag_map[STOP_TAG]]
+        # emission_score = sum(map(lambda indic: indic[1][label[indic[0]]] , enumerate(logits)))
+        # transition_score = sum(map(lambda index:self.transitions[label[index], label[index+1]], range(logits.size()[-2]-1)))
+        # transition_score += self.transitions[label[-1], self.tag_map[STOP_TAG]]
+        # score = emission_score + transition_score
         return score
 
     def total_score_1(self, logits, labels):
-        forward_var = logits[0]
-        for index in range(1, len(logits)):
+        init_vvars = torch.full((1, self.tag_size), -10000.)
+        init_vvars[0][self.tag_map[START_TAG]] = 0
+        forward_var = init_vvars
+        for index in range(len(logits)):
             alphas_t = []
             logit = logits[index]
             for next_tag in range(self.tag_size):
@@ -93,7 +105,8 @@ class BiLSTMCRF(nn.Module):
                 next_tag_var = forward_var + trans_score + emit_score
                 alphas_t.append(log_sum_exp(next_tag_var).view(1))
             forward_var = torch.cat(alphas_t).view(1, -1)
-        alpha = log_sum_exp(forward_var)
+        terminal_var = forward_var + self.transitions[:, self.tag_map[STOP_TAG]]
+        alpha = log_sum_exp(terminal_var)
         return alpha
 
     def total_score(self, logits, label):
@@ -105,19 +118,35 @@ class BiLSTMCRF(nn.Module):
 
         SCORE = log(e^S1 + e^S2 + ... + e^SN)
         """
-        # label = [0, 1, 2, 2, 3, 0]
-        # logits = torch.randn(len(label), self.tag_size)
+        logits = torch.tensor(
+            [
+                [0.1, 0.9],
+                [0.4, 0.6],
+                [0.8, 0.2]
+            ]
+        )
+        self.tag_size = 2
+        transitions = torch.tensor(
+            [
+                [0.1, 0.1],
+                [0.1, 0.1],
+            ]
+        )
         obs = []
-        # [[x0, x1],[x0, x1]] - > [[x0, x0], [x1, x1]]
         previous = logits[0].view(1, -1)
-        for index in range(1, len(logits)): 
+        # previous = torch.full((1, self.tag_size), -10000.)
+        # previous[0][2] = 0.
+        for index in range(len(logits)): 
             previous = previous.expand(self.tag_size, self.tag_size).t()
             obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
-            scores = previous + obs + self.transitions
-            # previous = torch.log(torch.sum(torch.exp(scores), 0))
+            scores = previous + obs + transitions
+            # scores = previous + obs + self.transitions
             previous = log_sum_exp(scores)
+        # previous = previous + self.transitions[:, self.tag_map[STOP_TAG]]
+        # previous = previous + transitions[:, 3]
         # caculate total_scores
         total_scores = log_sum_exp(previous.unsqueeze(0))[0]
+        import pdb; pdb.set_trace()
         return total_scores
 
     def neg_log_likelihood(self, sentence, tags, length):
@@ -125,15 +154,19 @@ class BiLSTMCRF(nn.Module):
         real_path_score = torch.zeros(1)
         real_path_score_1 = torch.zeros(1)
         total_score = torch.zeros(1)
+        total_score_1 = torch.zeros(1)
         for logit, tag, leng in zip(logits, tags, length):
             logit = logit[:leng]
             tag = tag[:leng]
-            # real_path_score_1 += self.real_path_score_1(logit, tag)
+            real_path_score_1 += self.real_path_score_(logit, tag)
             real_path_score += self.real_path_score(logit, tag)
             total_score += self.total_score(logit, tag)
+            total_score_1 += self.total_score_1(logit, tag)
 
         print("total score ", total_score)
+        print("total score 1", total_score_1)
         print("real score ", real_path_score)
+        print("real score 1", real_path_score_1)
         return total_score - real_path_score
 
     def forward(self, sentence):

@@ -21,10 +21,11 @@ class ChineseNer(object):
             batch_size=1
         )
         optimizer = optim.Adam(ner_model.parameters())
-        for _ in range(10):
-            ner_model.zero_grad()
-
+        # optimizer = optim.SGD(ner_model.parameters(), lr=0.01)
+        for epoch in range(10):
             for batch in train_manager.get_batch():
+                ner_model.zero_grad()
+
                 sentences, tags, length = zip(*batch)
                 sentences = torch.tensor(sentences, dtype=torch.long)
                 tags = torch.tensor(tags, dtype=torch.long)
@@ -33,6 +34,7 @@ class ChineseNer(object):
                 loss = ner_model.neg_log_likelihood(sentences, tags, length)
 
                 score, path = ner_model(sentences)
+                print("epoch ", epoch)
                 print(path)
                 print(tags[0].cpu().tolist())
                 print(loss)

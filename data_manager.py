@@ -18,7 +18,7 @@ class DataManager():
         self.batch_data = []
         self.vocab = {"unk": 0}
         # self.tag_map = {"O":0, "B-ORG":1, "I-ORG":2, "E-ORG":3, "B-PER":4, "I-PER":5, "E-PER":6, "S":7}
-        self.tag_map = {"O":0}
+        self.tag_map = {"O":0, "START":1, "STOP":2}
 
         if data_type == "train":
             self.data_path = "data/train"

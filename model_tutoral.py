@@ -65,7 +65,6 @@ class BiLSTM_CRF(nn.Module):
         init_alphas[0][self.tag_to_ix[START_TAG]] = 0.
         # Wrap in a variable so that we will get automatic backprop
         forward_var = init_alphas
-
         # Iterate through the sentence
         for feat in feats:
             alphas_t = []  # The forward tensors at this timestep
@@ -84,6 +83,7 @@ class BiLSTM_CRF(nn.Module):
                 alphas_t.append(log_sum_exp(next_tag_var).view(1))
             forward_var = torch.cat(alphas_t).view(1, -1)
         terminal_var = forward_var + self.transitions[self.tag_to_ix[STOP_TAG]]
+        import pdb; pdb.set_trace()
         alpha = log_sum_exp(terminal_var)
         print("total score ", alpha)
         return alpha
@@ -101,11 +101,9 @@ class BiLSTM_CRF(nn.Module):
         score = torch.zeros(1)
         tags = torch.cat([torch.tensor([self.tag_to_ix[START_TAG]], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
-            print(self.transitions[tags[i + 1], tags[i]], feat[tags[i + 1]])
             score = score + \
                 self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
         score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
-        import pdb; pdb.set_trace()
         print("real score ", score)
         return score
 
