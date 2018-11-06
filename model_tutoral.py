@@ -103,6 +103,7 @@ class BiLSTM_CRF(nn.Module):
         for i, feat in enumerate(feats):
             score = score + \
                 self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
+            import pdb; pdb.set_trace()
         score = score + self.transitions[self.tag_to_ix[STOP_TAG], tags[-1]]
         print("real score ", score)
         return score
@@ -234,17 +235,17 @@ for epoch in range(
         print(path)
         print(tag.cpu().tolist())
         print("-"*50)
-        sentences = torch.tensor(sentences, dtype=torch.long)
-        tags = torch.tensor(tags, dtype=torch.long)
-        length = torch.tensor(length, dtype=torch.long)
-        loss_2 = ner_model.neg_log_likelihood(sentences, tags, length)
-        score, path = ner_model(sentences)
-        print(path)
-        print(tags[0].cpu().tolist())
-        print(loss_2)
-        print("-"*50)
-        loss_2.backward()
-        optimizer_2.step()
+        # sentences = torch.tensor(sentences, dtype=torch.long)
+        # tags = torch.tensor(tags, dtype=torch.long)
+        # length = torch.tensor(length, dtype=torch.long)
+        # loss_2 = ner_model.neg_log_likelihood(sentences, tags, length)
+        # score, path = ner_model(sentences)
+        # print(path)
+        # print(tags[0].cpu().tolist())
+        # print(loss_2)
+        # print("-"*50)
+        # loss_2.backward()
+        # optimizer_2.step()
 
 
         

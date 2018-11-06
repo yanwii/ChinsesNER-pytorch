@@ -19,7 +19,6 @@ class ChineseNer(object):
             model.load_state_dict(torch.load(self.model_path + "params.pkl"))
         except Exception:
             print("model restore faild!")
-            exit()
 
     def train(self):
         train_manager = DataManager(batch_size=1)

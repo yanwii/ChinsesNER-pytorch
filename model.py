@@ -69,10 +69,12 @@ class BiLSTMCRF(nn.Module):
     def real_path_score_(self, feats, tags):
         # Gives the score of a provided tag sequence
         score = torch.zeros(1)
-        tags = torch.cat([torch.tensor([0], dtype=torch.long), tags])
+        tags = torch.cat([torch.tensor([self.tag_map[START_TAG]], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
             score = score + \
-                self.transitions[tags[i], tags[i + 1]] + feat[tags[i + 1]]
+                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
+            import pdb; pdb.set_trace()
+        score = score + self.transitions[self.tag_map[STOP_TAG], tags[-1]]
         return score
 
     def real_path_score(self, logits, label):
@@ -129,8 +131,8 @@ class BiLSTMCRF(nn.Module):
         previous = logits[0].view(1, -1)
         previous = torch.full((1, self.tag_size), 0)
         for index in range(len(logits)): 
-            previous = previous.expand(self.tag_size, self.tag_size).t()
-            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
+            previous = previous.expand(self.tag_size, self.tag_size)
+            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size).t()
             scores = previous + obs + self.transitions
             previous = log_sum_exp(scores)
         previous = previous + self.transitions[:, self.tag_map[STOP_TAG]]
@@ -156,7 +158,7 @@ class BiLSTMCRF(nn.Module):
         print("total score 1", total_score_1)
         print("real score ", real_path_score)
         print("real score 1", real_path_score_1)
-        return total_score - real_path_score
+        return total_score - real_path_score_1
 
     def forward(self, sentence):
         sentence = torch.tensor(sentence, dtype=torch.long)
