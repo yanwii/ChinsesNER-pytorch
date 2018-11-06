@@ -253,3 +253,5 @@ for epoch in range(
 with torch.no_grad():
     precheck_sent = prepare_sequence(training_data[0][0], word_to_ix)
     print(model(precheck_sent))
+
+# https://createmomo.github.io/2017/09/23/CRF_Layer_on_the_Top_of_BiLSTM_2/
