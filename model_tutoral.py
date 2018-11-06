@@ -9,8 +9,8 @@ import torch.autograd as autograd
 import torch.nn as nn
 import torch.optim as optim
 
-START_TAG = "<START>"
-STOP_TAG = "<STOP>"
+START_TAG = "START"
+STOP_TAG = "STOP"
 EMBEDDING_DIM = 5
 HIDDEN_DIM = 4
 
@@ -27,7 +27,8 @@ def prepare_sequence(seq, to_ix):
 def log_sum_exp(vec):
     max_score = vec[0, argmax(vec)]
     max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    return max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    return result
 
 class BiLSTM_CRF(nn.Module):
     
@@ -83,7 +84,6 @@ class BiLSTM_CRF(nn.Module):
                 alphas_t.append(log_sum_exp(next_tag_var).view(1))
             forward_var = torch.cat(alphas_t).view(1, -1)
         terminal_var = forward_var + self.transitions[self.tag_to_ix[STOP_TAG]]
-        import pdb; pdb.set_trace()
         alpha = log_sum_exp(terminal_var)
         print("total score ", alpha)
         return alpha
@@ -183,8 +183,6 @@ from data_manager import DataManager
 train_manager = DataManager(batch_size=1, data_type="train")
 
 tag_to_ix = copy.deepcopy(train_manager.tag_map)
-tag_to_ix["<START>"] = len(tag_to_ix)
-tag_to_ix["<STOP>"] = len(tag_to_ix)
 print(tag_to_ix)
 print(train_manager.tag_map)
 
@@ -218,6 +216,7 @@ for epoch in range(
         # Step 1. Remember that Pytorch accumulates gradients.
         # We need to clear them out before each instance
         model.zero_grad()
+        ner_model.zero_grad()
         # Step 2. Get our inputs ready for the network, that is,
         # turn them into Tensors of word indices.
         # sentence_in = prepare_sequence(sentence, word_to_ix)
@@ -235,17 +234,17 @@ for epoch in range(
         print(path)
         print(tag.cpu().tolist())
         print("-"*50)
-        # sentences = torch.tensor(sentences, dtype=torch.long)
-        # tags = torch.tensor(tags, dtype=torch.long)
-        # length = torch.tensor(length, dtype=torch.long)
-        # loss_2 = ner_model.neg_log_likelihood(sentences, tags, length)
-        # score, path = ner_model(sentences)
-        # print(path)
-        # print(tags[0].cpu().tolist())
-        # print(loss_2)
-        # print("-"*50)
-        # loss_2.backward()
-        # optimizer_2.step()
+        sentences = torch.tensor(sentences, dtype=torch.long)
+        tags = torch.tensor(tags, dtype=torch.long)
+        length = torch.tensor(length, dtype=torch.long)
+        loss_2 = ner_model.neg_log_likelihood(sentences, tags, length)
+        score, path = ner_model(sentences)
+        print(path)
+        print(tags[0].cpu().tolist())
+        print(loss_2)
+        print("-"*50)
+        loss_2.backward()
+        optimizer_2.step()
 
 
         

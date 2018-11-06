@@ -19,9 +19,15 @@ def argmax(vec):
 
 def log_sum_exp(vec):
     max_score = torch.max(vec, -1)[0].unsqueeze(0).t()
-    max_score_broadcast = max_score.expand(vec.size(1), vec.size()[1])
-    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    max_score_broadcast = max_score.expand(vec.size(1), vec.size(1))
+    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast), -1)).unsqueeze(0).t()
     return result.squeeze(1)
+
+def log_sum_exp_(vec):
+    max_score = vec[0, argmax(vec)]
+    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
+    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
+    return result
 
 class BiLSTMCRF(nn.Module):
     def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20, batch_size=2):
@@ -37,8 +43,8 @@ class BiLSTMCRF(nn.Module):
         self.transitions = nn.Parameter(
             torch.randn(self.tag_size, self.tag_size)
         )
-        self.transitions.data[:, self.tag_map[START_TAG]] = -10000
-        self.transitions.data[self.tag_map[STOP_TAG], :] = -10000
+        self.transitions.data[:, self.tag_map[START_TAG]] = 0
+        self.transitions.data[self.tag_map[STOP_TAG], :] = 0
 
         self.word_embeddings = nn.Embedding(vocab_size, self.embedding_dim)
         self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim // 2,
@@ -93,8 +99,8 @@ class BiLSTMCRF(nn.Module):
         return score
 
     def total_score_1(self, logits, labels):
-        init_vvars = torch.full((1, self.tag_size), -10000.)
-        init_vvars[0][self.tag_map[START_TAG]] = 0
+        init_vvars = torch.full((1, self.tag_size), 0)
+        # init_vvars[0][self.tag_map[START_TAG]] = 0
         forward_var = init_vvars
         for index in range(len(logits)):
             alphas_t = []
@@ -102,11 +108,12 @@ class BiLSTMCRF(nn.Module):
             for next_tag in range(self.tag_size):
                 emit_score = logit[next_tag].view(1, -1).expand(1, self.tag_size)
                 trans_score = self.transitions[next_tag].view(1, -1)
+                # trans_score = self.transitions[next_tag].view(1, -1)
                 next_tag_var = forward_var + trans_score + emit_score
-                alphas_t.append(log_sum_exp(next_tag_var).view(1))
+                alphas_t.append(log_sum_exp_(next_tag_var).view(1))
             forward_var = torch.cat(alphas_t).view(1, -1)
         terminal_var = forward_var + self.transitions[:, self.tag_map[STOP_TAG]]
-        alpha = log_sum_exp(terminal_var)
+        alpha = log_sum_exp_(terminal_var)
         return alpha
 
     def total_score(self, logits, label):
@@ -118,35 +125,17 @@ class BiLSTMCRF(nn.Module):
 
         SCORE = log(e^S1 + e^S2 + ... + e^SN)
         """
-        logits = torch.tensor(
-            [
-                [0.1, 0.9],
-                [0.4, 0.6],
-                [0.8, 0.2]
-            ]
-        )
-        self.tag_size = 2
-        transitions = torch.tensor(
-            [
-                [0.1, 0.1],
-                [0.1, 0.1],
-            ]
-        )
         obs = []
         previous = logits[0].view(1, -1)
-        # previous = torch.full((1, self.tag_size), -10000.)
-        # previous[0][2] = 0.
+        previous = torch.full((1, self.tag_size), 0)
         for index in range(len(logits)): 
             previous = previous.expand(self.tag_size, self.tag_size).t()
             obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
-            scores = previous + obs + transitions
-            # scores = previous + obs + self.transitions
+            scores = previous + obs + self.transitions
             previous = log_sum_exp(scores)
-        # previous = previous + self.transitions[:, self.tag_map[STOP_TAG]]
-        # previous = previous + transitions[:, 3]
+        previous = previous + self.transitions[:, self.tag_map[STOP_TAG]]
         # caculate total_scores
         total_scores = log_sum_exp(previous.unsqueeze(0))[0]
-        import pdb; pdb.set_trace()
         return total_scores
 
     def neg_log_likelihood(self, sentence, tags, length):

@@ -11,15 +11,25 @@ from data_manager import DataManager
 
 
 class ChineseNer(object):
+    def __init__(self):
+        self.model_path = "models/"
+
+    def restore_model(self, model):
+        try:
+            model.load_state_dict(torch.load(self.model_path + "params.pkl"))
+        except Exception:
+            print("model restore faild!")
+            exit()
 
     def train(self):
-
         train_manager = DataManager(batch_size=1)
         ner_model = BiLSTMCRF(
             tag_map=train_manager.tag_map,
             vocab_size=len(train_manager.vocab),
             batch_size=1
         )
+        self.restore_model(ner_model)
+
         optimizer = optim.Adam(ner_model.parameters())
         # optimizer = optim.SGD(ner_model.parameters(), lr=0.01)
         for epoch in range(10):
@@ -41,6 +51,7 @@ class ChineseNer(object):
                 print("-"*50)
                 loss.backward()
                 optimizer.step()
+                torch.save(ner_model.state_dict(), self.model_path+'params.pkl')
 
     def predict(self):
         with torch.no_grad():
