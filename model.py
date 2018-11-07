@@ -18,9 +18,9 @@ def argmax(vec):
     return idx.item()
 
 def log_sum_exp(vec):
-    max_score = torch.max(vec, -1)[0].unsqueeze(0).t()
+    max_score = torch.max(vec, 0)[0].unsqueeze(0)
     max_score_broadcast = max_score.expand(vec.size(1), vec.size(1))
-    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast), -1)).unsqueeze(0).t()
+    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast), 0)).unsqueeze(0)
     return result.squeeze(1)
 
 def log_sum_exp_(vec):
@@ -72,9 +72,8 @@ class BiLSTMCRF(nn.Module):
         tags = torch.cat([torch.tensor([self.tag_map[START_TAG]], dtype=torch.long), tags])
         for i, feat in enumerate(feats):
             score = score + \
-                self.transitions[tags[i + 1], tags[i]] + feat[tags[i + 1]]
-            import pdb; pdb.set_trace()
-        score = score + self.transitions[self.tag_map[STOP_TAG], tags[-1]]
+                self.transitions[tags[i], tags[i+1]] + feat[tags[i + 1]]
+        score = score + self.transitions[tags[-1], self.tag_map[STOP_TAG]]
         return score
 
     def real_path_score(self, logits, label):
@@ -109,7 +108,7 @@ class BiLSTMCRF(nn.Module):
             logit = logits[index]
             for next_tag in range(self.tag_size):
                 emit_score = logit[next_tag].view(1, -1).expand(1, self.tag_size)
-                trans_score = self.transitions[next_tag].view(1, -1)
+                trans_score = self.transitions.t()[next_tag].view(1, -1)
                 # trans_score = self.transitions[next_tag].view(1, -1)
                 next_tag_var = forward_var + trans_score + emit_score
                 alphas_t.append(log_sum_exp_(next_tag_var).view(1))
@@ -128,16 +127,15 @@ class BiLSTMCRF(nn.Module):
         SCORE = log(e^S1 + e^S2 + ... + e^SN)
         """
         obs = []
-        previous = logits[0].view(1, -1)
         previous = torch.full((1, self.tag_size), 0)
         for index in range(len(logits)): 
-            previous = previous.expand(self.tag_size, self.tag_size)
-            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size).t()
+            previous = previous.expand(self.tag_size, self.tag_size).t()
+            obs = logits[index].view(1, -1).expand(self.tag_size, self.tag_size)
             scores = previous + obs + self.transitions
             previous = log_sum_exp(scores)
         previous = previous + self.transitions[:, self.tag_map[STOP_TAG]]
         # caculate total_scores
-        total_scores = log_sum_exp(previous.unsqueeze(0))[0]
+        total_scores = log_sum_exp(previous.t())[0]
         return total_scores
 
     def neg_log_likelihood(self, sentence, tags, length):
@@ -158,7 +156,7 @@ class BiLSTMCRF(nn.Module):
         print("total score 1", total_score_1)
         print("real score ", real_path_score)
         print("real score 1", real_path_score_1)
-        return total_score - real_path_score_1
+        return total_score - real_path_score
 
     def forward(self, sentence):
         sentence = torch.tensor(sentence, dtype=torch.long)
