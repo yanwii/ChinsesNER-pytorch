@@ -1,0 +1,8 @@
+embedding_size: 100
+hidden_size: 128
+model_path: models/
+batch_size: 20
+dropout: 0.5
+tags:
+  - ORG
+  - PER

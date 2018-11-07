@@ -8,7 +8,7 @@ import pickle as cPickle
 import torch
 
 class DataManager():
-    def __init__(self, max_length=100, batch_size=20, data_type='train'):
+    def __init__(self, max_length=100, batch_size=20, data_type='train', tags=[]):
         self.index = 0
         self.input_size = 0
         self.batch_size = batch_size
@@ -21,6 +21,8 @@ class DataManager():
         self.tag_map = {"O":0, "START":1, "STOP":2}
 
         if data_type == "train":
+            assert tags, Exception("请指定需要训练的tag类型，如[\"ORG\", \"PER\"]")
+            self.generate_tags(tags)
             self.data_path = "data/train"
         elif data_type == "dev":
             self.data_path = "data/dev"
@@ -32,11 +34,19 @@ class DataManager():
         self.load_data()
         self.prepare_batch()
 
+    def generate_tags(self, tags):
+        self.tags = []
+        for tag in tags:
+            for prefix in ["B-", "I-", "E-"]:
+                self.tags.append(prefix + tag)
+        self.tags.append("O")
+
     def load_data_map(self):
-        with open("data/data_map.pkl", "rb") as f:
+        with open("models/data.pkl", "rb") as f:
             self.data_map = cPickle.load(f)
             self.vocab = self.data_map.get("vocab", {})
             self.tag_map = self.data_map.get("tag_map", {})
+            self.tags = self.data_map.keys()
 
     def load_data(self):
         # load data
@@ -58,15 +68,15 @@ class DataManager():
                     continue
                 if word not in self.vocab and self.data_type == "train":
                     self.vocab[word] = max(self.vocab.values()) + 1 
-                if tag not in self.tag_map and self.data_type == "train":
+                if tag not in self.tag_map and self.data_type == "train" and tag in self.tags:
                     self.tag_map[tag] = len(self.tag_map.keys())
                 sentence.append(self.vocab.get(word, 0)) 
                 target.append(self.tag_map.get(tag, 0))
         self.input_size = len(self.vocab.values())
-        print("-"*50)
         print("{} data: {}".format(self.data_type ,len(self.data)))
         print("vocab size: {}".format(self.input_size))
         print("unique tag: {}".format(len(self.tag_map.values())))
+        print("-"*50)
     
     def convert_tag(self, data):
         # add E-XXX for tags

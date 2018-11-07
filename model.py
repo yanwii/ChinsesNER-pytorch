@@ -4,18 +4,15 @@
 @Date: 2018-10-30 15:28:04
 '''
 import copy
-import torch
-from torch import nn
-import torch.nn.functional as F
+
 import numpy as np
+
+import torch
+import torch.nn.functional as F
+from torch import nn
 
 START_TAG = "START"
 STOP_TAG = "STOP"
-
-def argmax(vec):
-    # return the argmax as a python int
-    _, idx = torch.max(vec, 1)
-    return idx.item()
 
 def log_sum_exp(vec):
     max_score = torch.max(vec, 0)[0].unsqueeze(0)
@@ -23,19 +20,23 @@ def log_sum_exp(vec):
     result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast), 0)).unsqueeze(0)
     return result.squeeze(1)
 
-def log_sum_exp_(vec):
-    max_score = vec[0, argmax(vec)]
-    max_score_broadcast = max_score.view(1, -1).expand(1, vec.size()[1])
-    result = max_score + torch.log(torch.sum(torch.exp(vec - max_score_broadcast)))
-    return result
-
 class BiLSTMCRF(nn.Module):
-    def __init__(self, tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5}, vocab_size=20, batch_size=2):
+
+    def __init__(
+            self, 
+            tag_map={"O":0, "B-COM":1, "I-COM":2, "E-COM":3, "START":4, "STOP":5},
+            batch_size=20,
+            vocab_size=20,
+            hidden_dim=128,
+            dropout=1.0,
+            embedding_dim=100
+        ):
         super(BiLSTMCRF, self).__init__()
-        self.hidden_dim = 128
         self.batch_size = batch_size
-        self.embedding_dim = 100
+        self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
         self.vocab_size = vocab_size
+        self.dropout = dropout
         
         self.tag_size = len(tag_map)
         self.tag_map = tag_map
@@ -43,12 +44,12 @@ class BiLSTMCRF(nn.Module):
         self.transitions = nn.Parameter(
             torch.randn(self.tag_size, self.tag_size)
         )
-        self.transitions.data[:, self.tag_map[START_TAG]] = 0
-        self.transitions.data[self.tag_map[STOP_TAG], :] = 0
+        self.transitions.data[:, self.tag_map[START_TAG]] = -1000.
+        self.transitions.data[self.tag_map[STOP_TAG], :] = -1000.
 
         self.word_embeddings = nn.Embedding(vocab_size, self.embedding_dim)
         self.lstm = nn.LSTM(self.embedding_dim, self.hidden_dim // 2,
-                        num_layers=1, bidirectional=True, batch_first=True)
+                        num_layers=1, bidirectional=True, batch_first=True, dropout=self.dropout)
         self.hidden2tag = nn.Linear(self.hidden_dim, self.tag_size)
         self.hidden = self.init_hidden()
 
@@ -93,29 +94,7 @@ class BiLSTMCRF(nn.Module):
             transition_score = self.transitions[label[index], label[index + 1]]
             score += emission_score + transition_score
         score += self.transitions[label[-1], self.tag_map[STOP_TAG]]
-        # emission_score = sum(map(lambda indic: indic[1][label[indic[0]]] , enumerate(logits)))
-        # transition_score = sum(map(lambda index:self.transitions[label[index], label[index+1]], range(logits.size()[-2]-1)))
-        # transition_score += self.transitions[label[-1], self.tag_map[STOP_TAG]]
-        # score = emission_score + transition_score
         return score
-
-    def total_score_1(self, logits, labels):
-        init_vvars = torch.full((1, self.tag_size), 0)
-        # init_vvars[0][self.tag_map[START_TAG]] = 0
-        forward_var = init_vvars
-        for index in range(len(logits)):
-            alphas_t = []
-            logit = logits[index]
-            for next_tag in range(self.tag_size):
-                emit_score = logit[next_tag].view(1, -1).expand(1, self.tag_size)
-                trans_score = self.transitions.t()[next_tag].view(1, -1)
-                # trans_score = self.transitions[next_tag].view(1, -1)
-                next_tag_var = forward_var + trans_score + emit_score
-                alphas_t.append(log_sum_exp_(next_tag_var).view(1))
-            forward_var = torch.cat(alphas_t).view(1, -1)
-        terminal_var = forward_var + self.transitions[:, self.tag_map[STOP_TAG]]
-        alpha = log_sum_exp_(terminal_var)
-        return alpha
 
     def total_score(self, logits, label):
         """
@@ -138,32 +117,38 @@ class BiLSTMCRF(nn.Module):
         total_scores = log_sum_exp(previous.t())[0]
         return total_scores
 
-    def neg_log_likelihood(self, sentence, tags, length):
-        logits = self.__get_lstm_features(sentence)
+    def neg_log_likelihood(self, sentences, tags, length):
+        self.batch_size = sentences.size(0)
+        logits = self.__get_lstm_features(sentences)
         real_path_score = torch.zeros(1)
-        real_path_score_1 = torch.zeros(1)
         total_score = torch.zeros(1)
-        total_score_1 = torch.zeros(1)
         for logit, tag, leng in zip(logits, tags, length):
             logit = logit[:leng]
             tag = tag[:leng]
-            real_path_score_1 += self.real_path_score_(logit, tag)
             real_path_score += self.real_path_score(logit, tag)
             total_score += self.total_score(logit, tag)
-            total_score_1 += self.total_score_1(logit, tag)
-
-        print("total score ", total_score)
-        print("total score 1", total_score_1)
-        print("real score ", real_path_score)
-        print("real score 1", real_path_score_1)
+        # print("total score ", total_score)
+        # print("real score ", real_path_score)
         return total_score - real_path_score
 
-    def forward(self, sentence):
-        sentence = torch.tensor(sentence, dtype=torch.long)
-        logits = self.__get_lstm_features(sentence)
-        for logit in logits:
+    def forward(self, sentences, lengths=None):
+        """
+        :params sentences sentences to predict
+        :params lengths represent the ture length of sentence, the default is sentences.size(-1)
+        """
+        sentences = torch.tensor(sentences, dtype=torch.long)
+        if not lengths:
+            lengths = [i.size(-1) for i in sentences]
+        self.batch_size = sentences.size(0)
+        logits = self.__get_lstm_features(sentences)
+        scores = []
+        paths = []
+        for logit, leng in zip(logits, lengths):
+            logit = logit[:leng]
             score, path = self.__viterbi_decode(logit)
-        return score, path
+            scores.append(score)
+            paths.append(path)
+        return scores, paths
     
     def __viterbi_decode(self, logits):
         backpointers = []
@@ -203,6 +188,3 @@ class BiLSTMCRF(nn.Module):
             prev_score, max_path = torch.max(prev_prob, -1)
             path.append(max_path.cpu().tolist())
         return prev_score.cpu().tolist(), path
-
-
-    # https://github.com/napsternxg/pytorch-practice/blob/master/Viterbi%20decoding%20and%20CRF.ipynb
