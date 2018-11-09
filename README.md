@@ -22,9 +22,9 @@ step 2: train
 
     ...
     epoch [4] |██████                   | 154/591
-        loss 0.46
-        evaluation
-        ORG     recall 1.00     precision 1.00  f1 1.00
+            loss 0.46
+            evaluation
+            ORG     recall 1.00     precision 1.00  f1 1.00
     --------------------------------------------------
     epoch [4] |██████                   | 155/591
             loss 1.47
@@ -45,3 +45,7 @@ step 2: train
 
     请输入文本: 海利装饰材料有限公司
     [{'start': 0, 'stop': 10, 'word': '海利装饰材料有限公司', 'type': 'ORG'}]
+
+### REFERENCES
+- [Log-Linear Models, MEMMs, and CRFs](http://www.cs.columbia.edu/~mcollins/crf.pdf)
+- [Neural Architectures for Named Entity Recognition](https://arxiv.org/pdf/1603.01360.pdf)
